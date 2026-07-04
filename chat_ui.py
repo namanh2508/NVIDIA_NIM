@@ -88,12 +88,46 @@ with st.sidebar:
         if "uploaded_image_b64" in st.session_state:
             del st.session_state["uploaded_image_b64"]
 
-    # Tính năng Upload File Text
-    uploaded_file = st.file_uploader("📄 Tải lên file văn bản/code", type=["txt", "py", "md", "csv", "json", "js", "html", "css"])
+    # Hàm hỗ trợ đọc đa định dạng file
+    def extract_text_from_file(file):
+        filename = file.name.lower()
+        if filename.endswith(".pdf"):
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(file)
+                return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            except ImportError:
+                st.error("Thiếu thư viện đọc PDF. Vui lòng chạy: `pip install pypdf`")
+                return ""
+            except Exception as e:
+                st.error(f"Lỗi đọc PDF: {e}")
+                return ""
+        elif filename.endswith((".docx", ".doc")):
+            try:
+                import docx
+                doc = docx.Document(file)
+                return "\n".join([para.text for para in doc.paragraphs])
+            except ImportError:
+                st.error("Thiếu thư viện đọc DOCX. Vui lòng chạy: `pip install python-docx`")
+                return ""
+            except Exception as e:
+                st.error(f"Lỗi đọc DOCX: {e}")
+                return ""
+        else:
+            # Mặc định đọc như file text
+            try:
+                return file.read().decode("utf-8")
+            except Exception as e:
+                st.error(f"Không thể đọc nội dung file text: {e}")
+                return ""
+
+    # Tính năng Upload File Document/Code
+    uploaded_file = st.file_uploader("📄 Tải lên file tài liệu/code", type=["txt", "py", "md", "csv", "json", "js", "html", "css", "pdf", "docx", "doc"])
     if uploaded_file:
-        file_content = uploaded_file.read().decode("utf-8")
-        st.session_state["uploaded_file_context"] = f"Nội dung file {uploaded_file.name}:\n```\n{file_content}\n```\n"
-        st.success(f"Đã nạp file: {uploaded_file.name}")
+        file_content = extract_text_from_file(uploaded_file)
+        if file_content:
+            st.session_state["uploaded_file_context"] = f"Nội dung file {uploaded_file.name}:\n```\n{file_content}\n```\n"
+            st.success(f"Đã nạp file: {uploaded_file.name} (Độ dài: {len(file_content)} ký tự)")
     else:
         if "uploaded_file_context" in st.session_state:
             del st.session_state["uploaded_file_context"]
