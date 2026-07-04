@@ -21,7 +21,7 @@ MODELS = {
 
 st.set_page_config(page_title="NVIDIA AI Coding Agent", page_icon="🤖", layout="wide")
 
-st.title("🤖 NVIDIA VIM - AI Coding Agent")
+st.title("🤖 NVIDIA NIM - AI Coding Agent")
 
 # --- Thanh bên (Sidebar) ---
 with st.sidebar:
