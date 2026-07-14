@@ -5,6 +5,12 @@ import re
 import requests
 import base64
 import json
+from datetime import datetime
+
+# --- Cấu hình Thư mục Lịch sử ---
+HISTORY_DIR = "chat_histories"
+if not os.path.exists(HISTORY_DIR):
+    os.makedirs(HISTORY_DIR)
 
 # --- Cấu hình Models ---
 MODELS = {
@@ -60,6 +66,26 @@ st.set_page_config(page_title="NVIDIA NIM AI Agent", page_icon="🚀", layout="w
 st.title("🚀 NVIDIA NIM - AI Coding Agent")
 st.caption("Powered by NVIDIA VIM - Hỗ trợ đa mô hình với thiết lập tối ưu cho từng Model")
 
+# Khởi tạo session_id nếu chưa có
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = None
+
+def get_history_files():
+    files = [f for f in os.listdir(HISTORY_DIR) if f.endswith('.json')]
+    files.sort(reverse=True)
+    return files
+
+def save_chat_history():
+    if not st.session_state.messages:
+        return
+    if st.session_state["session_id"] is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        st.session_state["session_id"] = f"chat_{timestamp}.json"
+    
+    filepath = os.path.join(HISTORY_DIR, st.session_state["session_id"])
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(st.session_state.messages, f, ensure_ascii=False, indent=2)
+
 # --- Thanh bên (Sidebar) ---
 with st.sidebar:
     st.header("⚙️ Cấu hình Agent")
@@ -72,7 +98,7 @@ with st.sidebar:
     elif model_type == "multimodal":
         st.success("🎨 Model đa phương thức (Hỗ trợ Ảnh + Text).")
     elif model_type == "vision-only":
-        st.warning("👁️ Model chuyên biệt cho hình ảnh (Trích xuất thành phần trang web).")
+        st.warning("👁️ Model chuyên biệt cho hình ảnh.")
         
     st.divider()
     
@@ -114,20 +140,26 @@ with st.sidebar:
                 st.error(f"Lỗi đọc DOCX: {e}")
                 return ""
         else:
-            # Mặc định đọc như file text
             try:
                 return file.read().decode("utf-8")
             except Exception as e:
                 st.error(f"Không thể đọc nội dung file text: {e}")
                 return ""
 
-    # Tính năng Upload File Document/Code
-    uploaded_file = st.file_uploader("📄 Tải lên file tài liệu/code", type=["txt", "py", "md", "csv", "json", "js", "html", "css", "pdf", "docx", "doc"])
-    if uploaded_file:
-        file_content = extract_text_from_file(uploaded_file)
-        if file_content:
-            st.session_state["uploaded_file_context"] = f"Nội dung file {uploaded_file.name}:\n```\n{file_content}\n```\n"
-            st.success(f"Đã nạp file: {uploaded_file.name} (Độ dài: {len(file_content)} ký tự)")
+    # Tính năng Upload nhiều File
+    uploaded_files = st.file_uploader("📄 Tải lên file tài liệu/code", type=["txt", "py", "md", "csv", "json", "js", "html", "css", "pdf", "docx", "doc"], accept_multiple_files=True)
+    if uploaded_files:
+        combined_context = ""
+        total_len = 0
+        for u_file in uploaded_files:
+            content = extract_text_from_file(u_file)
+            if content:
+                combined_context += f"--- Bắt đầu file: {u_file.name} ---\n{content}\n--- Kết thúc file ---\n\n"
+                total_len += len(content)
+        
+        if combined_context:
+            st.session_state["uploaded_file_context"] = combined_context
+            st.success(f"Đã nạp {len(uploaded_files)} file ({total_len} ký tự)")
     else:
         if "uploaded_file_context" in st.session_state:
             del st.session_state["uploaded_file_context"]
@@ -162,9 +194,26 @@ with st.sidebar:
             st.error("Đường dẫn thư mục không tồn tại.")
 
     st.divider()
-    if st.button("🗑️ Xóa lịch sử chat"):
+    
+    st.header("🕰️ Quản lý Cuộc Trò Chuyện")
+    if st.button("➕ Tạo Cuộc Chat Mới", use_container_width=True):
         st.session_state.messages = []
+        st.session_state["session_id"] = None
         st.rerun()
+        
+    history_files = get_history_files()
+    selected_history = st.selectbox("Tải lịch sử cũ:", ["-- Chọn --"] + history_files)
+    if st.button("Tải lại lịch sử", use_container_width=True):
+        if selected_history != "-- Chọn --":
+            filepath = os.path.join(HISTORY_DIR, selected_history)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    st.session_state.messages = json.load(f)
+                st.session_state["session_id"] = selected_history
+                st.success(f"Đã tải {selected_history}!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Lỗi tải lịch sử: {e}")
 
 # --- Khởi tạo Client API ---
 client = OpenAI(
@@ -191,12 +240,12 @@ if "codebase_context" in st.session_state:
 
 if st.session_state.messages:
     st.session_state.messages[0] = {"role": "system", "content": current_system_prompt}
+    save_chat_history() # Đảm bảo file được tạo nếu có tin nhắn
 
 # --- Hiển thị Chat và Lưu File ---
 for i, message in enumerate(st.session_state.messages):
     if message["role"] != "system":
         with st.chat_message(message["role"]):
-            # Xử lý hiển thị text nếu là multimodal list
             if isinstance(message["content"], list):
                 text_content = next((item["text"] for item in message["content"] if item.get("type") == "text"), "")
                 st.markdown(text_content)
@@ -205,7 +254,6 @@ for i, message in enumerate(st.session_state.messages):
                 st.markdown(message["content"])
                 str_content = message["content"]
             
-            # Logic "Lưu file này" cho assistant
             if message["role"] == "assistant":
                 code_blocks = re.findall(r'```(\w+)?\n(.*?)```', str_content, re.DOTALL)
                 if code_blocks:
@@ -233,7 +281,6 @@ for i, message in enumerate(st.session_state.messages):
 # --- Xử lý User Input ---
 if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đơn giản)..."):
     
-    # Định dạng tin nhắn Multimodal
     if MODELS[selected_model].get("type") == "multimodal" and "uploaded_image_b64" in st.session_state:
         msg_content = [
             {"type": "text", "text": prompt},
@@ -244,6 +291,7 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
 
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": msg_content})
+    save_chat_history() # Lưu tin nhắn user
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
@@ -251,7 +299,6 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
         reasoning_response = ""
         
         try:
-            # 1. Xử lý riêng cho Vision-only Model (Nemotron Page Elements)
             if MODELS[selected_model].get("type") == "vision-only":
                 if "uploaded_image_b64" not in st.session_state:
                     st.error("⚠️ Model này yêu cầu phải tải ảnh lên ở thanh bên!")
@@ -275,9 +322,9 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
                         
                     message_placeholder.markdown(full_response)
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    save_chat_history() # Lưu kết quả vision
                     st.rerun()
 
-            # 2. Xử lý cho các model chuẩn OpenAI API
             else:
                 params = MODELS[selected_model].get("params", {})
                 kwargs = {
@@ -289,7 +336,6 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
                     "max_tokens": params.get("max_tokens", 8192)
                 }
                 
-                # Truyền các tham số mở rộng
                 if "presence_penalty" in params:
                     kwargs["presence_penalty"] = params["presence_penalty"]
                 if "extra_body" in params:
@@ -303,13 +349,11 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
                     
                     delta = chunk.choices[0].delta
                     
-                    # Trích xuất luồng suy luận (Reasoning)
                     reasoning = getattr(delta, "reasoning_content", None)
                     if reasoning:
                         reasoning_response += reasoning
                         message_placeholder.markdown("*(Đang suy luận...)*\n\n```text\n" + reasoning_response + "\n```")
                     
-                    # Trích xuất nội dung chính
                     if getattr(delta, "content", None) is not None:
                         full_response += delta.content
                         
@@ -320,7 +364,6 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
                         
                         message_placeholder.markdown(display_text + "▌")
                 
-                # Hoàn tất hiển thị
                 final_display = ""
                 if reasoning_response:
                     final_display += "### 🧠 Quá trình suy luận:\n```text\n" + reasoning_response + "\n```\n---\n"
@@ -328,6 +371,7 @@ if prompt := st.chat_input("Nhập câu hỏi (VD: Tạo một website React đ�
                 message_placeholder.markdown(final_display)
                 
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
+                save_chat_history() # Lưu kết quả assistant
                 st.rerun()
                 
         except Exception as e:
